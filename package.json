@@ -1,0 +1,12 @@
+{
+  "name": "bha-rss",
+  "version": "1.0.0",
+  "private": true,
+  "description": "BHA RSS: reads outside sources (news feeds, YouTube, LinkedIn, web pages), keeps every item in Supabase, and sends one daily digest to the BHA Engine Dashboard. Replaces Genie-RSS and ragingester.",
+  "type": "module",
+  "engines": { "node": ">=20" },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test test/*.test.js"
+  }
+}
