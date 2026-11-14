@@ -3,7 +3,7 @@ services:
     name: bha-rss
     runtime: node
     plan: starter
-    region: ohio
+    region: oregon
     branch: main
     buildCommand: npm install --omit=dev
     startCommand: npm start
