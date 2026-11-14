@@ -6,6 +6,8 @@ One service for everything BHA reads from outside: news and blog feeds, YouTube 
 - **Keeps raw items here only.** Nothing raw goes to BHARAG.
 - **Once a day** (after `DIGEST_HOUR_UTC`, default 06:00) it compiles the UTC day before into one digest with sections for the Media Twin, Research Twin, North Star and Genie, every point carrying its item's link, and posts it to the BHA Engine Dashboard (`POST /api/engine/outside-digest`). The dashboard stores it, sends it to BHARAG once, and serves it to the agents with `read_outside_digest`.
 
+Lives at **https://rss.bhanetwork.org** (Render service bha-rss, Oregon; also https://bha-rss.onrender.com). Genie-RSS and ragingester are suspended in the Render project Retire, not deleted.
+
 ## Tables (Supabase, ragingester project, public schema)
 
 `rss_sources`, `rss_runs`, `rss_items`, `rss_digests`. Row level security is on with no policies: only the service role key reads or writes them.
