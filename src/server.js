@@ -4,7 +4,7 @@ import http from 'node:http';
 import { timingSafeEqual } from 'node:crypto';
 import { config, missingSettings } from './config.js';
 import { db } from './db.js';
-import { pass, runSource, stats } from './scheduler.js';
+import { pass, runSource, stats, stop, busy } from './scheduler.js';
 import { digestPass } from './digest.js';
 
 const digestState = { last: null, at: null };
@@ -88,5 +88,14 @@ if (config.schedulerOn && !missingSettings().includes('SUPABASE_SERVICE_ROLE_KEY
     }
   };
   setTimeout(tick, 10_000);
-  setInterval(tick, config.pollMs);
+  const timer = setInterval(tick, config.pollMs);
+  process.on('SIGTERM', () => {
+    stop();
+    clearInterval(timer);
+    console.log('[bha-rss] SIGTERM: claiming no more sources; runs in progress finish, then the process exits');
+    const wait = setInterval(() => {
+      if (!busy()) process.exit(0);
+    }, 1000);
+    setTimeout(() => process.exit(0), 25_000).unref();
+  });
 }

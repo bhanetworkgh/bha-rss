@@ -44,3 +44,7 @@ A feed alone gives a headline and two lines, and a YouTube feed only the descrip
 - **LinkedIn:** 10 posts per profile (`LINKEDIN_POSTS`), with a shared post's text, the post's stats and any article or document kept.
 
 Every item records how it was captured in `rss_items.meta.capture`. A step that fails keeps the item as the feed gave it, names the reason in its meta, and writes the count on the run (`rss_runs.error`) and the source (`last_error`) while the run still counts as a success.
+
+## Deploy hand-over (15 Nov 2026)
+
+On a deploy Render keeps the old instance up for a minute or two beside the new one. On SIGTERM the scheduler claims no more sources, lets runs in progress finish and exits, so no source is collected by old code during the hand-over. A run still marked running after 30 minutes belongs to a process that stopped mid-run; the next pass closes it as failed and says so.
