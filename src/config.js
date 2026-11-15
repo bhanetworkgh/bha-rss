@@ -24,7 +24,13 @@ export const config = {
   // The digest covers the UTC day before and is written at this UTC hour.
   digestHourUtc: Number.isInteger(Number(env.DIGEST_HOUR_UTC)) ? Number(env.DIGEST_HOUR_UTC) : 6,
   maxItemsPerDigest: num('MAX_ITEMS_PER_DIGEST', 400),
-  linkedinPosts: num('LINKEDIN_POSTS', 5),
+  linkedinPosts: num('LINKEDIN_POSTS', 10),
+  // Richer capture (15 Nov 2026): per source and run, new videos given a transcript and new short news items
+  // opened for the article's own text. A feed item shorter than shortContentChars counts as short.
+  transcriptsPerRun: num('YT_TRANSCRIPTS_PER_RUN', 5),
+  transcriptActor: env.YT_TRANSCRIPT_ACTOR || 'automation-lab~youtube-transcript',
+  articlesPerRun: num('ARTICLES_PER_RUN', 10),
+  shortContentChars: num('SHORT_CONTENT_CHARS', 800),
   schedulerOn: env.SCHEDULER !== 'off',
 };
 

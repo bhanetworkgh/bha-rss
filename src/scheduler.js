@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { db } from './db.js';
 import { collectors } from './collectors.js';
 
-const MAX_CONTENT = 20_000;
+const MAX_CONTENT = 60_000;
 let running = false;
 export const stats = { passes: 0, lastPassAt: null, lastPassRuns: 0, lastError: null };
 
@@ -28,7 +28,7 @@ export async function runSource(source) {
   const collect = collectors[source.kind];
   try {
     if (!collect) throw new Error(`no collector for kind ${source.kind}`);
-    const { items, cursor } = await collect(source);
+    const { items, cursor, warnings = [] } = await collect(source);
     let added = [];
     if (items.length) {
       const rows = items.map((i) => ({
@@ -39,13 +39,17 @@ export async function runSource(source) {
         author: i.author ? i.author.slice(0, 200) : null,
         content: (i.content || '').slice(0, MAX_CONTENT),
         published_at: i.published_at,
+        meta: i.meta || {},
       }));
       added = (await db.insertNew('rss_items', rows, 'source_id,guid')) || [];
     }
     const now = new Date().toISOString();
-    await db.update('rss_runs', { id: `eq.${run.id}` }, { status: 'success', items_seen: items.length, items_new: added.length, ended_at: now });
-    await db.update('rss_sources', { id: `eq.${source.id}` }, { last_run_at: now, last_status: 'success', last_error: null, cursor, updated_at: now });
-    return { ok: true, source_id: source.id, seen: items.length, new: added.length };
+    // A step that enriched less than it tried (an article that would not open, a transcript that did not come back)
+    // still saves every item; what it could not do is written on the run and the source, never dropped.
+    const note = warnings.length ? `saved; ${warnings.length} not enriched: ${warnings.join(' | ')}`.slice(0, 1000) : null;
+    await db.update('rss_runs', { id: `eq.${run.id}` }, { status: 'success', items_seen: items.length, items_new: added.length, error: note, ended_at: now });
+    await db.update('rss_sources', { id: `eq.${source.id}` }, { last_run_at: now, last_status: 'success', last_error: note, cursor, updated_at: now });
+    return { ok: true, source_id: source.id, seen: items.length, new: added.length, warnings: warnings.length };
   } catch (err) {
     const now = new Date().toISOString();
     const reason = String(err?.message || err).slice(0, 1000);

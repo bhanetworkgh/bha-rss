@@ -34,3 +34,13 @@ A missing setting is named on `/health`.
 ## Test
 
 `npm test` (no outside packages; Node 20 or later).
+
+## Richer capture (15 Nov 2026)
+
+A feed alone gives a headline and two lines, and a YouTube feed only the description box. For items the service does not already hold:
+
+- **News:** an item shorter than `SHORT_CONTENT_CHARS` (800) has its link opened and the article's own text kept (`src/enrich.js`, `articleText`), up to `ARTICLES_PER_RUN` (10) per source per run. The feed's summary stays in `meta.feed_summary`.
+- **YouTube:** the newest `YT_TRANSCRIPTS_PER_RUN` (5) new videos per channel per run get their transcript and details from the Apify actor `YT_TRANSCRIPT_ACTOR` (default `automation-lab~youtube-transcript`): description, then everything said, plus views, length, keywords and caption language in `meta`.
+- **LinkedIn:** 10 posts per profile (`LINKEDIN_POSTS`), with a shared post's text, the post's stats and any article or document kept.
+
+Every item records how it was captured in `rss_items.meta.capture`. A step that fails keeps the item as the feed gave it, names the reason in its meta, and writes the count on the run (`rss_runs.error`) and the source (`last_error`) while the run still counts as a success.

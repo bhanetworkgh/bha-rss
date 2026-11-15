@@ -1,6 +1,7 @@
 // One collector per kind of source. Each returns { items, cursor } and throws with a plain reason on failure.
 import { config } from './config.js';
 import { parseFeed, looksLikeFeed, discoverFeedLink, stripHtml } from './feed.js';
+import { heldGuids, enrichArticles, enrichYoutube } from './enrich.js';
 
 const UA = 'Mozilla/5.0 (compatible; BHA-RSS/1.0; +https://bhanetwork.org)';
 
@@ -28,7 +29,9 @@ export async function collectRss(source) {
     usedUrl = found;
   }
   const feed = parseFeed(text);
-  return { items: feed.items, cursor: { ...source.cursor, feed_url: usedUrl, feed_title: feed.title } };
+  const held = await heldGuids(source.id, feed.items.map((i) => i.guid));
+  const warnings = await enrichArticles(feed.items, held);
+  return { items: feed.items, warnings, cursor: { ...source.cursor, feed_url: usedUrl, feed_title: feed.title } };
 }
 
 // YouTube: every channel has a free Atom feed of its latest videos; only the channel id is needed.
@@ -64,7 +67,9 @@ export async function collectYoutube(source) {
     if (!channelId) throw new Error(`could not find the channel id on ${source.url}`);
   }
   const feed = parseFeed(await get(`https://www.youtube.com/feeds/videos.xml?channel_id=${channelId}`, 'application/atom+xml'));
-  return { items: feed.items, cursor: { ...source.cursor, channel_id: channelId, feed_title: feed.title } };
+  const held = await heldGuids(source.id, feed.items.map((i) => i.guid));
+  const warnings = await enrichYoutube(feed.items, held);
+  return { items: feed.items, warnings, cursor: { ...source.cursor, channel_id: channelId, feed_title: feed.title } };
 }
 
 // LinkedIn: a profile's recent posts through the Apify actor Genie-RSS used.
@@ -75,13 +80,26 @@ export function mapLinkedinPost(item) {
   const url = item.url || '';
   const guid = item.urn || item.full_urn || url.split('/').filter(Boolean).pop() || null;
   const text = item.text || '';
+  const rs = item.reshared_post || item.resharedPost || null;
+  const reshared = rs && rs.text
+    ? { text: rs.text, url: rs.url || null, author: rs.author ? `${rs.author.first_name || ''} ${rs.author.last_name || ''}`.trim() || rs.author.name || null : null }
+    : null;
   return {
     guid,
     url: url || null,
     title: text ? text.split('\n')[0].slice(0, 140) : 'LinkedIn post',
     author,
-    content: text,
+    content: reshared ? `${text}\n\nShared post${reshared.author ? ' by ' + reshared.author : ''}:\n${reshared.text}` : text,
     published_at: d && !Number.isNaN(d.getTime()) ? d.toISOString() : null,
+    meta: {
+      capture: 'post',
+      post_type: item.post_type || null,
+      stats: item.stats || null,
+      reshared: reshared ? { author: reshared.author, url: reshared.url } : null,
+      article: item.article ? { title: item.article.title || null, url: item.article.url || item.article.link || null } : null,
+      document: item.document ? { title: item.document.title || null } : null,
+      media: item.media ? { type: item.media.type || null, count: Array.isArray(item.media.images) ? item.media.images.length : null } : null,
+    },
   };
 }
 
