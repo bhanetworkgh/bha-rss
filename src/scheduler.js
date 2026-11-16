@@ -1,4 +1,5 @@
 // Reads every due source, a few at a time, and keeps what it collects. One pass per POLL_MS.
+import { reportError } from './report.js';
 import { config } from './config.js';
 import { db } from './db.js';
 import { collectors } from './collectors.js';
@@ -72,12 +73,14 @@ export async function runSource(source) {
     const note = warnings.length ? `saved; ${warnings.length} not enriched: ${warnings.join(' | ')}`.slice(0, 1000) : null;
     await db.update('rss_runs', { id: `eq.${run.id}` }, { status: 'success', items_seen: items.length, items_new: added.length, error: note, ended_at: now });
     await db.update('rss_sources', { id: `eq.${source.id}` }, { last_run_at: now, last_status: 'success', last_error: note, cursor, updated_at: now });
+    if (warnings.length) void reportError({ kind: 'enrichment_failed', subject: source.id, source_name: source.name, source_url: source.url, error: note });
     return { ok: true, source_id: source.id, seen: items.length, new: added.length, warnings: warnings.length };
   } catch (err) {
     const now = new Date().toISOString();
     const reason = String(err?.message || err).slice(0, 1000);
     await db.update('rss_runs', { id: `eq.${run.id}` }, { status: 'failed', error: reason, ended_at: now });
     await db.update('rss_sources', { id: `eq.${source.id}` }, { last_run_at: now, last_status: 'failed', last_error: reason, updated_at: now });
+    void reportError({ kind: 'source_failed', subject: source.id, source_name: source.name, source_url: source.url, error: reason });
     return { ok: false, source_id: source.id, error: reason };
   }
 }
@@ -112,6 +115,7 @@ export async function pass() {
   } catch (err) {
     stats.lastError = String(err?.message || err);
     console.error('[scheduler] pass failed:', stats.lastError);
+    void reportError({ kind: 'pass_failed', subject: 'scheduler', error: stats.lastError });
     return { error: stats.lastError };
   } finally {
     running = false;

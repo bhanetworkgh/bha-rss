@@ -6,6 +6,7 @@ import { config, missingSettings } from './config.js';
 import { db } from './db.js';
 import { pass, runSource, stats, stop, busy } from './scheduler.js';
 import { digestPass } from './digest.js';
+import { reportError } from './report.js';
 
 const digestState = { last: null, at: null };
 
@@ -80,11 +81,15 @@ if (config.schedulerOn && !missingSettings().includes('SUPABASE_SERVICE_ROLE_KEY
     try {
       digestState.last = await digestPass();
       digestState.at = new Date().toISOString();
-      if (digestState.last.state === 'delivery_failed') console.error('[digest] delivery failed:', digestState.last.error);
+      if (digestState.last.state === 'delivery_failed') {
+        console.error('[digest] delivery failed:', digestState.last.error);
+        void reportError({ kind: 'digest_not_delivered', subject: digestState.last.digest_date, digest_date: digestState.last.digest_date, error: digestState.last.error });
+      }
     } catch (err) {
       digestState.last = { state: 'error', error: String(err?.message || err) };
       digestState.at = new Date().toISOString();
       console.error('[digest] failed:', digestState.last.error);
+      void reportError({ kind: 'digest_failed', subject: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10), error: digestState.last.error });
     }
   };
   setTimeout(tick, 10_000);
