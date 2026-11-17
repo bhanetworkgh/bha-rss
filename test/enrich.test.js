@@ -72,3 +72,29 @@ test('mapLinkedinPost keeps a shared post and the post details', () => {
   assert.equal(plain.content, 'Just a post');
   assert.equal(plain.meta.reshared, null);
 });
+
+test('a site that refuses articles is asked once per run, and nothing is reported as failed', async () => {
+  const { enrichArticles, articlesRefusedRecently } = await import('../src/enrich.js');
+  let calls = 0;
+  const fake = async () => { calls += 1; return new Response('no', { status: 403 }); };
+  const items = [1, 2, 3].map((n) => ({ guid: `g${n}`, url: `https://www.bloomberg.com/news/articles/${n}`, content: 'short feed text' }));
+  const r = await enrichArticles(items, new Set(), 10, fake);
+  assert.equal(calls, 1, 'one refusal stops the rest');
+  assert.equal(r.refused_status, 403);
+  assert.deepEqual(r.warnings, []);
+  for (const it of items) {
+    assert.equal(it.content, 'short feed text');
+    assert.match(it.meta.article_note, /refuses article reads \(answered 403\)/);
+  }
+  assert.equal(articlesRefusedRecently({ articles_refused_at: new Date().toISOString() }), true);
+  assert.equal(articlesRefusedRecently({ articles_refused_at: new Date(Date.now() - 8 * 86_400_000).toISOString() }), false);
+  assert.equal(articlesRefusedRecently({}), false);
+});
+
+test('a page that answers 500 is still a warning, not a refusal', async () => {
+  const { enrichArticles } = await import('../src/enrich.js');
+  const fake = async () => new Response('err', { status: 500 });
+  const r = await enrichArticles([{ guid: 'a', url: 'https://example.com/a', content: 'x' }], new Set(), 10, fake);
+  assert.equal(r.refused_status, null);
+  assert.equal(r.warnings.length, 1);
+});

@@ -1,7 +1,7 @@
 // One collector per kind of source. Each returns { items, cursor } and throws with a plain reason on failure.
 import { config } from './config.js';
 import { parseFeed, looksLikeFeed, discoverFeedLink, stripHtml } from './feed.js';
-import { heldGuids, enrichArticles, enrichYoutube } from './enrich.js';
+import { heldGuids, enrichArticles, enrichYoutube, articlesRefusedRecently, REFUSED_RECHECK_DAYS } from './enrich.js';
 
 const UA = 'Mozilla/5.0 (compatible; BHA-RSS/1.0; +https://bhanetwork.org)';
 
@@ -30,8 +30,25 @@ export async function collectRss(source) {
   }
   const feed = parseFeed(text);
   const held = await heldGuids(source.id, feed.items.map((i) => i.guid));
-  const warnings = await enrichArticles(feed.items, held);
-  return { items: feed.items, warnings, cursor: { ...source.cursor, feed_url: usedUrl, feed_title: feed.title } };
+  const cursor = { ...source.cursor, feed_url: usedUrl, feed_title: feed.title };
+  // A site that refused article reads within the last week is not asked again; the feed's own text is kept.
+  if (articlesRefusedRecently(source.cursor)) {
+    for (const it of feed.items) {
+      if (!held.has(it.guid) && it.url) it.meta = { ...(it.meta || {}), capture: 'feed', article_note: `the site refuses article reads (answered ${source.cursor.articles_refused_status}); checked again after ${REFUSED_RECHECK_DAYS} days` };
+    }
+    return { items: feed.items, warnings: [], cursor };
+  }
+  const { warnings, refused_status } = await enrichArticles(feed.items, held);
+  if (refused_status) {
+    // Not a failure: the items are kept as the feed gave them, each says why, and the source remembers it
+    // on its cursor. It raises no error card.
+    cursor.articles_refused_at = new Date().toISOString();
+    cursor.articles_refused_status = refused_status;
+  } else if (source.cursor?.articles_refused_at) {
+    delete cursor.articles_refused_at;
+    delete cursor.articles_refused_status;
+  }
+  return { items: feed.items, warnings, cursor };
 }
 
 // YouTube: every channel has a free Atom feed of its latest videos; only the channel id is needed.

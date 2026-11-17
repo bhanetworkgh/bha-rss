@@ -38,20 +38,44 @@ export function articleText(html) {
   return [...new Set(parts)].join('\n\n');
 }
 
+// A site that refuses to hand an article to a reader that is not signed in (a paywall: 401, 402, 403, 451)
+// refuses every article on it, so after the first refusal the rest of its items in that run are left as the
+// feed gave them, and the source remembers it for a week (17 Nov 2026, Bloomberg Markets: ten 403s every day,
+// each one an error card, while the feed itself read fine). It is one note when first seen, never a daily card.
+export const REFUSED_STATUSES = new Set([401, 402, 403, 451]);
+export const REFUSED_RECHECK_DAYS = 7;
+
+// Whether articles on this source were refused recently enough that they are not tried again yet. Pure.
+export function articlesRefusedRecently(cursor, now = Date.now()) {
+  const at = Date.parse(cursor?.articles_refused_at || '');
+  return Number.isFinite(at) && now - at < REFUSED_RECHECK_DAYS * 86_400_000;
+}
+
 // Opens each new short item's link and keeps the article's own text when it is longer than what the feed gave.
-export async function enrichArticles(items, held, limit = config.articlesPerRun) {
+// Returns the warnings, and refused_status when the site refused articles (the caller notes it on the source).
+export async function enrichArticles(items, held, limit = config.articlesPerRun, fetchImpl = fetch) {
   const warnings = [];
   let tried = 0;
+  let refused = null;
   for (const it of items) {
-    if (tried >= limit) break;
     if (held.has(it.guid) || !it.url || (it.content || '').length >= config.shortContentChars) continue;
+    if (refused) {
+      it.meta = { ...(it.meta || {}), capture: 'feed', article_note: `the site refuses article reads (answered ${refused})` };
+      continue;
+    }
+    if (tried >= limit) break;
     tried += 1;
     try {
-      const res = await fetch(it.url, {
+      const res = await fetchImpl(it.url, {
         headers: { 'user-agent': UA, accept: 'text/html' },
         redirect: 'follow',
         signal: AbortSignal.timeout(config.fetchTimeoutMs),
       });
+      if (REFUSED_STATUSES.has(res.status)) {
+        refused = res.status;
+        it.meta = { ...(it.meta || {}), capture: 'feed', article_note: `the site refuses article reads (answered ${refused})` };
+        continue;
+      }
       if (!res.ok) throw new Error(`answered ${res.status}`);
       const text = articleText(await res.text());
       if (text.length > (it.content || '').length + 200) {
@@ -66,7 +90,7 @@ export async function enrichArticles(items, held, limit = config.articlesPerRun)
       warnings.push(`article ${it.url}: ${reason}`);
     }
   }
-  return warnings;
+  return { warnings, refused_status: refused };
 }
 
 export function videoIdOf(item) {
