@@ -113,7 +113,7 @@ export function videoIdOf(item) {
 // for APIFY_HOLD_MS (6 hours), the items are still saved with what the feed gave, and one service_blocked card is
 // sent for the whole account (the dashboard says it once a day).
 export class ApifyBlockedError extends Error {}
-export const apifyHold = { until: 0, reason: '' };
+export const apifyHold = { until: 0, reason: '', reported: false, lastTry: 0 };
 export const APIFY_HOLD_MS = 6 * 3_600_000;
 
 // Whether an Apify answer is the account being blocked, not one actor or one input failing. Pure.
@@ -128,17 +128,28 @@ export function apifyBlocked(now = Date.now()) {
 }
 
 // Called by every Apify caller on a response that was not ok. Starts the hold and sends one card; returns the error.
+// The card is sent once per hold, and tried again (at most once a minute) until the dashboard takes it,
+// so a report refused or lost (a deploy in between) is never the end of it.
+function reportHold(report, now) {
+  if (!report || apifyHold.reported || now - apifyHold.lastTry < 60_000) return;
+  apifyHold.lastTry = now;
+  Promise.resolve(report({ kind: 'service_blocked', subject: 'apify', source_name: 'Apify (YouTube transcripts and LinkedIn)', source_url: 'https://console.apify.com/billing', error: `${apifyHold.reason} Every Apify call is held for 6 hours; items are still saved, without transcripts or LinkedIn posts.` }))
+    .then((r) => { if (r?.ok) apifyHold.reported = true; })
+    .catch(() => {});
+}
+
 export function noteApifyBlock(status, text, report, now = Date.now()) {
   const fresh = !apifyBlocked(now);
   apifyHold.until = now + APIFY_HOLD_MS;
   apifyHold.reason = `Apify answered ${status}: ${String(text || '').slice(0, 300)}`;
-  if (fresh && report) void report({ kind: 'service_blocked', subject: 'apify', source_name: 'Apify (YouTube transcripts and LinkedIn)', source_url: 'https://console.apify.com/billing', error: `${apifyHold.reason} Every Apify call is held for 6 hours; items are still saved, without transcripts or LinkedIn posts.` });
+  if (fresh) { apifyHold.reported = false; apifyHold.lastTry = 0; }
+  reportHold(report, now);
   return new ApifyBlockedError(apifyHold.reason);
 }
 
 async function apify(actor, input) {
   if (!config.apifyToken) throw new Error('APIFY_TOKEN is not set');
-  if (apifyBlocked()) throw new ApifyBlockedError(apifyHold.reason);
+  if (apifyBlocked()) { reportHold(reportError, Date.now()); throw new ApifyBlockedError(apifyHold.reason); }
   const res = await fetch(`https://api.apify.com/v2/acts/${actor}/run-sync-get-dataset-items?token=${config.apifyToken}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },

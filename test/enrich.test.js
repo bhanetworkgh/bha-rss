@@ -120,6 +120,26 @@ test('an Apify usage block is the account, and holds every call once', () => {
   apifyHold.until = 0;
 });
 
+test('a service_blocked card the dashboard refused is tried again, and stops once taken', async () => {
+  const body = '{ "error": { "type": "platform-feature-disabled" } }';
+  apifyHold.until = 0;
+  let answer = { ok: false };
+  const sent = [];
+  const report = async (r) => { sent.push(r); return answer; };
+  const now = 5_000_000;
+  noteApifyBlock(403, body, report, now);
+  await new Promise((r) => setImmediate(r));
+  noteApifyBlock(403, body, report, now + 30_000);
+  assert.equal(sent.length, 1);
+  answer = { ok: true };
+  noteApifyBlock(403, body, report, now + 61_000);
+  await new Promise((r) => setImmediate(r));
+  assert.equal(sent.length, 2);
+  noteApifyBlock(403, body, report, now + 200_000);
+  assert.equal(sent.length, 2);
+  apifyHold.until = 0;
+});
+
 test('a 429 on an article stops reading that site this run and is not a warning', async () => {
   let calls = 0;
   const fetchImpl = async () => { calls += 1; return { status: 429, ok: false, text: async () => '' }; };
