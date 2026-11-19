@@ -33,7 +33,22 @@ Bullets on anything that could change what BHA should prioritise (indoor farming
 ## Context for Genie
 2 to 5 short facts a builder asking Genie might need, each with its link.
 
+Every bullet in every section starts with one or more lane tags, so it can be routed: [CAPITAL] funding, investors, valuations and markets; [VFARM] indoor and vertical farming, growing, food and the cabinet's hardware; [PHYSICAL_AI] robots, arms, sensors, cameras and machines acting in the world; [MODELS] AI models, chips, compute and their cost; [AGENTS] AI agents, automation, customer service AI and the tools around them. Use only these tags, in capitals and square brackets, before any other text on the bullet, for example "- [MODELS] [CAPITAL] ...". If none fits, use [OTHER]. The lines "Nothing fits today." and "No priority signal today." are not bullets and take no tag.
+
 Your first line is the title: "Outside digest -- <date>: <the single biggest thing in 8 words or fewer>". Then a blank line, then the sections.`;
+
+// Genie rebuild step 8.7 (Jason, 17 Nov 2026, #bha-engine-digests 1794857554.370099): every bullet carries a lane tag.
+export const LANE_TAGS = ['CAPITAL', 'VFARM', 'PHYSICAL_AI', 'MODELS', 'AGENTS', 'OTHER'];
+const TAG_RUN = new RegExp(`^(\\[(?:${LANE_TAGS.join('|')})\\]\\s*)+`);
+
+// The bullets that do not open with a known lane tag. Bullets are lines starting "- ", "* " or "1. ".
+export function untaggedBullets(body) {
+  return String(body || '').split('\n')
+    .map((l) => l.trim())
+    .filter((l) => /^([-*\u2022]|\d+\.)\s+/.test(l))
+    .map((l) => l.replace(/^([-*\u2022]|\d+\.)\s+/, ''))
+    .filter((l) => !TAG_RUN.test(l));
+}
 
 function itemLine(it) {
   const src = it.rss_sources ? `${it.rss_sources.kind}: ${it.rss_sources.name || it.rss_sources.cursor?.feed_title || it.rss_sources.url}` : 'unknown source';
@@ -41,7 +56,7 @@ function itemLine(it) {
   return `- [${src}] ${it.title}\n  link: ${it.url || 'none'}\n  ${body}`;
 }
 
-async function callModel(date, items) {
+async function callModel(date, items, correction) {
   const res = await fetch(`${config.openrouterUrl}/chat/completions`, {
     method: 'POST',
     headers: { authorization: `Bearer ${config.openrouterKey}`, 'content-type': 'application/json' },
@@ -52,6 +67,7 @@ async function callModel(date, items) {
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: `Date: ${date}\n${items.length} items:\n\n${items.map(itemLine).join('\n')}` },
+        ...(correction ? [{ role: 'assistant', content: correction.text }, { role: 'user', content: correction.ask }] : []),
       ],
     }),
     signal: AbortSignal.timeout(180_000),
@@ -120,7 +136,15 @@ export async function digestPass({ now = new Date(), force = false } = {}) {
     if (!force && !isDue(now)) return { ...out, state: 'not_due' };
     const items = await itemsFor(win);
     if (!items.length) return { ...out, state: 'no_items' };
-    const text = await callModel(win.digest_date, items);
+    let text = await callModel(win.digest_date, items);
+    let missing = untaggedBullets(splitTitle(text, win.digest_date).body);
+    if (missing.length) {
+      // Asked once more with the bullets named; still untagged is a failure, reported, never posted half-tagged.
+      const ask = `${missing.length} bullet(s) have no lane tag. Write the whole digest again, same content, with every bullet opening with its lane tags from the list. Untagged: ${missing.slice(0, 5).map((m) => m.slice(0, 80)).join(' | ')}`;
+      text = await callModel(win.digest_date, items, { text, ask });
+      missing = untaggedBullets(splitTitle(text, win.digest_date).body);
+      if (missing.length) throw new Error(`${missing.length} digest bullet(s) still had no lane tag after one retry, e.g. "${missing[0].slice(0, 120)}"`);
+    }
     const { title, body } = splitTitle(text, win.digest_date);
     const sources = new Set(items.map((i) => i.rss_sources?.url));
     [digest] = await db.insert('rss_digests', [{
