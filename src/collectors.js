@@ -1,7 +1,8 @@
 // One collector per kind of source. Each returns { items, cursor } and throws with a plain reason on failure.
 import { config } from './config.js';
 import { parseFeed, looksLikeFeed, discoverFeedLink, stripHtml } from './feed.js';
-import { heldGuids, enrichArticles, enrichYoutube, articlesRefusedRecently, REFUSED_RECHECK_DAYS } from './enrich.js';
+import { heldGuids, enrichArticles, enrichYoutube, articlesRefusedRecently, REFUSED_RECHECK_DAYS, apifyBlocked, isAccountBlock, noteApifyBlock } from './enrich.js';
+import { reportError } from './report.js';
 
 const UA = 'Mozilla/5.0 (compatible; BHA-RSS/1.0; +https://bhanetwork.org)';
 
@@ -122,6 +123,8 @@ export function mapLinkedinPost(item) {
 
 export async function collectLinkedin(source) {
   if (!config.apifyToken) throw new Error('APIFY_TOKEN is not set, so LinkedIn cannot be read');
+  // The Apify account is blocked (one service_blocked card says so): the profile is read again once the hold ends.
+  if (apifyBlocked()) return { items: [], cursor: source.cursor || {} };
   const n = config.linkedinPosts;
   const res = await fetch(
     `https://api.apify.com/v2/actors/apimaestro~linkedin-profile-posts/run-sync-get-dataset-items?token=${config.apifyToken}`,
@@ -133,6 +136,10 @@ export async function collectLinkedin(source) {
     }
   );
   const text = await res.text();
+  if (!res.ok && isAccountBlock(res.status, text)) {
+    noteApifyBlock(res.status, text, reportError);
+    return { items: [], cursor: source.cursor || {} };
+  }
   if (!res.ok) throw new Error(`Apify answered ${res.status}: ${text.slice(0, 200)}`);
   const data = JSON.parse(text);
   if (!Array.isArray(data)) throw new Error('Apify did not return a list of posts');

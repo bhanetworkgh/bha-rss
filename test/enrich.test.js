@@ -98,3 +98,35 @@ test('a page that answers 500 is still a warning, not a refusal', async () => {
   assert.equal(r.refused_status, null);
   assert.equal(r.warnings.length, 1);
 });
+
+// 19 Nov 2026: an Apify account block is one held service, not a failure per source; a 429 is not reported.
+import { isAccountBlock, noteApifyBlock, apifyBlocked, apifyHold, enrichArticles } from '../src/enrich.js';
+test('an Apify usage block is the account, and holds every call once', () => {
+  const body = '{ "error": { "type": "platform-feature-disabled", "message": "You\'ve used the $5.00 of monthly usage" } }';
+  assert.equal(isAccountBlock(403, body), true);
+  assert.equal(isAccountBlock(402, ''), true);
+  assert.equal(isAccountBlock(403, '{"error":{"type":"record-not-found"}}'), false);
+  assert.equal(isAccountBlock(500, body), false);
+  apifyHold.until = 0;
+  const sent = [];
+  const now = 1_000_000;
+  noteApifyBlock(403, body, (r) => sent.push(r), now);
+  noteApifyBlock(403, body, (r) => sent.push(r), now + 1000);
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].kind, 'service_blocked');
+  assert.equal(sent[0].subject, 'apify');
+  assert.equal(apifyBlocked(now + 3_600_000), true);
+  assert.equal(apifyBlocked(now + 7 * 3_600_000), false);
+  apifyHold.until = 0;
+});
+
+test('a 429 on an article stops reading that site this run and is not a warning', async () => {
+  let calls = 0;
+  const fetchImpl = async () => { calls += 1; return { status: 429, ok: false, text: async () => '' }; };
+  const items = [1, 2, 3].map((n) => ({ guid: 'g' + n, url: 'https://x.test/' + n, content: 'short' }));
+  const r = await enrichArticles(items, new Set(), 10, fetchImpl);
+  assert.equal(calls, 1);
+  assert.deepEqual(r.warnings, []);
+  assert.equal(r.refused_status, null);
+  assert.match(items[2].meta.article_note, /429/);
+});
