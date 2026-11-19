@@ -6,9 +6,11 @@ import { config, missingSettings } from './config.js';
 import { db } from './db.js';
 import { pass, runSource, stats, stop, busy } from './scheduler.js';
 import { digestPass } from './digest.js';
+import { tunePass } from './tune.js';
 import { reportError } from './report.js';
 
 const digestState = { last: null, at: null };
+const tuneState = { last: null, at: null };
 
 function keyOk(req) {
   const given = Buffer.from(String(req.headers['x-api-key'] || ''));
@@ -40,6 +42,7 @@ async function status() {
     scheduler: { on: config.schedulerOn, ...stats },
     digests,
     last_digest_pass: digestState,
+    last_tune_pass: tuneState,
   };
 }
 
@@ -61,6 +64,7 @@ const server = http.createServer(async (req, res) => {
       const now = body.date ? new Date(new Date(`${body.date}T00:00:00Z`).getTime() + 86_400_000) : new Date();
       return send(res, 200, await digestPass({ now, force: true }));
     }
+    if (req.method === 'POST' && url.pathname === '/tune') return send(res, 200, await tunePass({ force: true }));
     return send(res, 404, { error: 'not found' });
   } catch (err) {
     return send(res, 500, { error: String(err?.message || err) });
@@ -90,6 +94,18 @@ if (config.schedulerOn && !missingSettings().includes('SUPABASE_SERVICE_ROLE_KEY
       digestState.at = new Date().toISOString();
       console.error('[digest] failed:', digestState.last.error);
       void reportError({ kind: 'digest_failed', subject: new Date(Date.now() - 86_400_000).toISOString().slice(0, 10), error: digestState.last.error });
+    }
+    // Once a day, after the digest is delivered: score the sources and act on it (Genie rebuild 8.8).
+    if (['tuned', 'already_ran'].includes(tuneState.last?.state) && tuneState.last.tune_date === new Date().toISOString().slice(0, 10)) return;
+    if (tuneState.last?.state === 'error' && Date.now() - new Date(tuneState.at).getTime() < 30 * 60_000) return;
+    try {
+      tuneState.last = await tunePass();
+      tuneState.at = new Date().toISOString();
+    } catch (err) {
+      tuneState.last = { state: 'error', error: String(err?.message || err) };
+      tuneState.at = new Date().toISOString();
+      console.error('[tune] failed:', tuneState.last.error);
+      void reportError({ kind: 'tune_failed', subject: new Date().toISOString().slice(0, 10), error: tuneState.last.error });
     }
   };
   setTimeout(tick, 10_000);
