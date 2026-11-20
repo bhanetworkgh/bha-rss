@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
-const { untaggedBullets, LANE_TAGS } = await import('../src/digest.js');
+const { untaggedBullets, LANE_TAGS, sumCost } = await import('../src/digest.js');
 
 test('tagged bullets pass, untagged ones are named', () => {
   const body = [
@@ -19,4 +19,10 @@ test('tagged bullets pass, untagged ones are named', () => {
 
 test('the vocabulary holds Jason\'s four tags', () => {
   for (const t of ['CAPITAL', 'VFARM', 'PHYSICAL_AI', 'MODELS']) assert.ok(LANE_TAGS.includes(t));
+});
+
+test('the model cost is the sum of every call, and unknown when one call reported none', () => {
+  assert.equal(sumCost([0.01, 0.02]), 0.03);
+  assert.equal(sumCost([0.01, null]), null);
+  assert.equal(sumCost([]), null);
 });

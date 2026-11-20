@@ -64,6 +64,8 @@ async function callModel(date, items, correction) {
       model: config.digestModel,
       max_tokens: 16000,
       temperature: 0.2,
+      // 20 Nov 2026: OpenRouter returns what the call cost, so the digest card can say what the day cost.
+      usage: { include: true },
       messages: [
         { role: 'system', content: SYSTEM },
         { role: 'user', content: `Date: ${date}\n${items.length} items:\n\n${items.map(itemLine).join('\n')}` },
@@ -78,7 +80,12 @@ async function callModel(date, items, correction) {
   const out = data?.choices?.[0]?.message?.content?.trim();
   if (!out) throw new Error('the model returned no text');
   if (data?.choices?.[0]?.finish_reason === 'length') throw new Error('the model was cut off before the digest ended');
-  return out;
+  return { text: out, cost: typeof data?.usage?.cost === 'number' ? data.usage.cost : null };
+}
+
+// The cost of every model call that wrote the digest, null when OpenRouter did not report one of them.
+export function sumCost(costs) {
+  return costs.length && costs.every((c) => typeof c === 'number') ? costs.reduce((a, b) => a + b, 0) : null;
 }
 
 export function splitTitle(text, date) {
@@ -99,6 +106,7 @@ async function deliver(digest, items) {
     items_used: digest.items_used,
     sources_used: digest.sources_used,
     model: digest.model,
+    model_cost_usd: typeof digest.model_cost_usd === 'number' ? digest.model_cost_usd : (digest.model_cost_usd != null ? Number(digest.model_cost_usd) : null),
     items: cited,
   };
   const body_b64 = Buffer.from(JSON.stringify(payload), 'utf8').toString('base64');
@@ -136,12 +144,16 @@ export async function digestPass({ now = new Date(), force = false } = {}) {
     if (!force && !isDue(now)) return { ...out, state: 'not_due' };
     const items = await itemsFor(win);
     if (!items.length) return { ...out, state: 'no_items' };
-    let text = await callModel(win.digest_date, items);
+    const first = await callModel(win.digest_date, items);
+    let text = first.text;
+    const costs = [first.cost];
     let missing = untaggedBullets(splitTitle(text, win.digest_date).body);
     if (missing.length) {
       // Asked once more with the bullets named; still untagged is a failure, reported, never posted half-tagged.
       const ask = `${missing.length} bullet(s) have no lane tag. Write the whole digest again, same content, with every bullet opening with its lane tags from the list. Untagged: ${missing.slice(0, 5).map((m) => m.slice(0, 80)).join(' | ')}`;
-      text = await callModel(win.digest_date, items, { text, ask });
+      const again = await callModel(win.digest_date, items, { text, ask });
+      text = again.text;
+      costs.push(again.cost);
       missing = untaggedBullets(splitTitle(text, win.digest_date).body);
       if (missing.length) throw new Error(`${missing.length} digest bullet(s) still had no lane tag after one retry, e.g. "${missing[0].slice(0, 120)}"`);
     }
@@ -156,6 +168,7 @@ export async function digestPass({ now = new Date(), force = false } = {}) {
       items_used: items.length,
       sources_used: sources.size,
       model: config.digestModel,
+      model_cost_usd: sumCost(costs),
     }]);
     for (let i = 0; i < items.length; i += 100) {
       const ids = items.slice(i, i + 100).map((x) => x.id).join(',');
