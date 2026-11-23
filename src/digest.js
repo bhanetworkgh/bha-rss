@@ -135,8 +135,23 @@ async function itemsFor(win) {
   });
 }
 
+// One digest pass at a time in this process (23 Nov 2026): the scheduler ticks every minute and a pass can take
+// longer than that (the model call), so a second tick used to start its own pass, pay for a second model call and
+// fail on the unique digest_date with a 409 after the first had already delivered.
+let inFlight = null;
+
 // Makes the digest for the day that just ended if it is not held, and delivers any held digest not yet delivered.
-export async function digestPass({ now = new Date(), force = false } = {}) {
+export async function digestPass(opts = {}) {
+  if (inFlight) return { digest_date: digestWindow(opts.now ?? new Date()).digest_date, state: 'busy' };
+  inFlight = runDigestPass(opts);
+  try {
+    return await inFlight;
+  } finally {
+    inFlight = null;
+  }
+}
+
+async function runDigestPass({ now = new Date(), force = false } = {}) {
   const win = digestWindow(now);
   const out = { digest_date: win.digest_date };
   let [digest] = await db.select('rss_digests', { select: '*', digest_date: `eq.${win.digest_date}` });
@@ -159,7 +174,8 @@ export async function digestPass({ now = new Date(), force = false } = {}) {
     }
     const { title, body } = splitTitle(text, win.digest_date);
     const sources = new Set(items.map((i) => i.rss_sources?.url));
-    [digest] = await db.insert('rss_digests', [{
+    // Another process (a deploy overlap) may have written this day's digest meanwhile: keep theirs, never a 409.
+    [digest] = await db.insertNew('rss_digests', [{
       digest_date: win.digest_date,
       period_start: win.start.toISOString(),
       period_end: win.end.toISOString(),
@@ -169,13 +185,19 @@ export async function digestPass({ now = new Date(), force = false } = {}) {
       sources_used: sources.size,
       model: config.digestModel,
       model_cost_usd: sumCost(costs),
-    }]);
-    for (let i = 0; i < items.length; i += 100) {
-      const ids = items.slice(i, i + 100).map((x) => x.id).join(',');
-      await db.update('rss_items', { id: `in.(${ids})` }, { digest_id: digest.id });
+    }], 'digest_date');
+    if (!digest) {
+      [digest] = await db.select('rss_digests', { select: '*', digest_date: `eq.${win.digest_date}` });
+      if (!digest) throw new Error(`the digest for ${win.digest_date} was neither written nor found`);
+      out.already_written = true;
+    } else {
+      for (let i = 0; i < items.length; i += 100) {
+        const ids = items.slice(i, i + 100).map((x) => x.id).join(',');
+        await db.update('rss_items', { id: `in.(${ids})` }, { digest_id: digest.id });
+      }
+      digest._items = items;
+      out.created = true;
     }
-    digest._items = items;
-    out.created = true;
   }
   if (digest.delivered_at) return { ...out, state: 'delivered', digest_id: digest.id };
   const items = digest._items || (await db.select('rss_items', { select: 'title,url,rss_sources(kind,name,url)', digest_id: `eq.${digest.id}`, limit: '200' }));
