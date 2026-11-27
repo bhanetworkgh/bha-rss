@@ -6,14 +6,27 @@ import { reportError } from './report.js';
 
 const UA = 'Mozilla/5.0 (compatible; BHA-RSS/1.0; +https://bhanetwork.org)';
 
-async function get(url, accept = '*/*') {
-  const res = await fetch(url, {
-    headers: { 'user-agent': UA, accept },
-    redirect: 'follow',
-    signal: AbortSignal.timeout(config.fetchTimeoutMs),
-  });
+// 27 Nov 2026 (Destiny): YouTube's feed answers 503 now and then (Kitco News at 20:54 UTC, Farzad at
+// 07:14 UTC) and reads fine minutes later, so each one raised a failure card for nothing. A server-side
+// refusal (500, 502, 503, 504) or a throttle (429) is tried twice more, a few seconds apart, before the
+// source counts as failed. Anything else (404, 403) fails at once.
+export const RETRY_STATUSES = new Set([429, 500, 502, 503, 504]);
+export const RETRY_WAITS_MS = [3000, 8000];
+
+export async function get(url, accept = '*/*', { fetchImpl = fetch, waits = RETRY_WAITS_MS } = {}) {
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetchImpl(url, {
+      headers: { 'user-agent': UA, accept },
+      redirect: 'follow',
+      signal: AbortSignal.timeout(config.fetchTimeoutMs),
+    });
+    if (res.ok || !RETRY_STATUSES.has(res.status) || attempt >= waits.length) break;
+    await res.text().catch(() => '');
+    await new Promise((r) => setTimeout(r, waits[attempt]));
+  }
   const text = await res.text();
-  if (!res.ok) throw new Error(`${url} answered ${res.status}`);
+  if (!res.ok) throw new Error(`${url} answered ${res.status}${RETRY_STATUSES.has(res.status) && waits.length ? ` (tried ${waits.length + 1} times)` : ''}`);
   return text;
 }
 
